@@ -42,8 +42,7 @@ from transformers import (
 )
 from utils_ner import NerDataset, Split, get_labels
 
-from custom_src.rms_prop import HybridSGDRMSprop
-from custom_src.custom_trainer import CustomTrainer
+from rms_prop.rms_prop_trainer import RMSPropTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +264,7 @@ def main():
         }
 
     # Initialize our Trainer
-    trainer = CustomTrainer(
+    trainer = RMSPropTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
