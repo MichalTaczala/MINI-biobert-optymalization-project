@@ -264,6 +264,8 @@ def main():
         }
 
     # Initialize our Trainer
+
+    # trainer = Trainer(
     trainer = RMSPropTrainer(
         model=model,
         args=training_args,
