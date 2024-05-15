@@ -42,6 +42,8 @@ from transformers import (
 )
 from utils_ner import NerDataset, Split, get_labels
 
+from rms_prop.rms_prop_trainer import RMSPropTrainer
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,19 +54,32 @@ class ModelArguments:
     """
 
     model_name_or_path: str = field(
-        metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"
+        }
     )
     config_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+        default=None,
+        metadata={
+            "help": "Pretrained config name or path if not the same as model_name"
+        },
     )
     tokenizer_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
+        default=None,
+        metadata={
+            "help": "Pretrained tokenizer name or path if not the same as model_name"
+        },
     )
-    use_fast: bool = field(default=False, metadata={"help": "Set this flag to use fast tokenization."})
+    use_fast: bool = field(
+        default=False, metadata={"help": "Set this flag to use fast tokenization."}
+    )
     # If you want to tweak more attributes on your tokenizer, you should do it in a distinct script,
     # or just modify its tokenizer_config.json.
     cache_dir: Optional[str] = field(
-        default=None, metadata={"help": "Where do you want to store the pretrained models downloaded from s3"}
+        default=None,
+        metadata={
+            "help": "Where do you want to store the pretrained models downloaded from s3"
+        },
     )
 
 
@@ -75,11 +90,15 @@ class DataTrainingArguments:
     """
 
     data_dir: str = field(
-        metadata={"help": "The input data dir. Should contain the .txt files for a CoNLL-2003-formatted task."}
+        metadata={
+            "help": "The input data dir. Should contain the .txt files for a CoNLL-2003-formatted task."
+        }
     )
     labels: Optional[str] = field(
         default=None,
-        metadata={"help": "Path to a file containing all labels. If not specified, CoNLL-2003 labels are used."},
+        metadata={
+            "help": "Path to a file containing all labels. If not specified, CoNLL-2003 labels are used."
+        },
     )
     max_seq_length: int = field(
         default=128,
@@ -89,7 +108,8 @@ class DataTrainingArguments:
         },
     )
     overwrite_cache: bool = field(
-        default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
+        default=False,
+        metadata={"help": "Overwrite the cached training and evaluation sets"},
     )
 
 
@@ -98,11 +118,15 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser(
+        (ModelArguments, DataTrainingArguments, TrainingArguments)
+    )
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(
+            json_file=os.path.abspath(sys.argv[1])
+        )
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -147,14 +171,22 @@ def main():
     # download model & vocab.
 
     config = AutoConfig.from_pretrained(
-        model_args.config_name if model_args.config_name else model_args.model_name_or_path,
+        (
+            model_args.config_name
+            if model_args.config_name
+            else model_args.model_name_or_path
+        ),
         num_labels=num_labels,
         id2label=label_map,
         label2id={label: i for i, label in enumerate(labels)},
         cache_dir=model_args.cache_dir,
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
+        (
+            model_args.tokenizer_name
+            if model_args.tokenizer_name
+            else model_args.model_name_or_path
+        ),
         cache_dir=model_args.cache_dir,
         use_fast=model_args.use_fast,
     )
@@ -164,7 +196,7 @@ def main():
         config=config,
         cache_dir=model_args.cache_dir,
     )
-    '''
+    """
     model_to_save = AutoModel.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -174,7 +206,7 @@ def main():
     model_to_save.save_pretrained(training_args.output_dir)
     tokenizer.save_pretrained(training_args.output_dir)
     import pdb; pdb.set_trace()
-    '''
+    """
 
     # Get datasets
     train_dataset = (
@@ -204,14 +236,16 @@ def main():
         else None
     )
 
-    def align_predictions(predictions: np.ndarray, label_ids: np.ndarray) -> Tuple[List[int], List[int]]:
+    def align_predictions(
+        predictions: np.ndarray, label_ids: np.ndarray
+    ) -> Tuple[List[int], List[int]]:
         preds = np.argmax(predictions, axis=2)
 
         batch_size, seq_len = preds.shape
 
         out_label_list = [[] for _ in range(batch_size)]
         preds_list = [[] for _ in range(batch_size)]
-        
+
         for i in range(batch_size):
             for j in range(seq_len):
                 if label_ids[i, j] != nn.CrossEntropyLoss().ignore_index:
@@ -222,7 +256,7 @@ def main():
 
     def compute_metrics(p: EvalPrediction) -> Dict:
         preds_list, out_label_list = align_predictions(p.predictions, p.label_ids)
-        
+
         return {
             "precision": precision_score(out_label_list, preds_list),
             "recall": recall_score(out_label_list, preds_list),
@@ -230,7 +264,9 @@ def main():
         }
 
     # Initialize our Trainer
-    trainer = Trainer(
+
+    # trainer = Trainer(
+    trainer = RMSPropTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -241,7 +277,11 @@ def main():
     # Training
     if training_args.do_train:
         trainer.train(
-            model_path=model_args.model_name_or_path if os.path.isdir(model_args.model_name_or_path) else None
+            model_path=(
+                model_args.model_name_or_path
+                if os.path.isdir(model_args.model_name_or_path)
+                else None
+            )
         )
         trainer.save_model()
         # For convenience, we also re-save the tokenizer to the same directory,
@@ -255,7 +295,7 @@ def main():
         logger.info("*** Evaluate ***")
 
         result = trainer.evaluate()
-        
+
         output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
         if trainer.is_world_master():
             with open(output_eval_file, "w") as writer:
@@ -265,8 +305,7 @@ def main():
                     writer.write("%s = %s\n" % (key, value))
 
             results.update(result)
-    
-    
+
     # Predict
     if training_args.do_predict:
         test_dataset = NerDataset(
@@ -281,9 +320,11 @@ def main():
 
         predictions, label_ids, metrics = trainer.predict(test_dataset)
         preds_list, _ = align_predictions(predictions, label_ids)
-        
+
         # Save predictions
-        output_test_results_file = os.path.join(training_args.output_dir, "test_results.txt")
+        output_test_results_file = os.path.join(
+            training_args.output_dir, "test_results.txt"
+        )
         if trainer.is_world_master():
             with open(output_test_results_file, "w") as writer:
                 logger.info("***** Test results *****")
@@ -291,8 +332,9 @@ def main():
                     logger.info("  %s = %s", key, value)
                     writer.write("%s = %s\n" % (key, value))
 
-        
-        output_test_predictions_file = os.path.join(training_args.output_dir, "test_predictions.txt")
+        output_test_predictions_file = os.path.join(
+            training_args.output_dir, "test_predictions.txt"
+        )
         if trainer.is_world_master():
             with open(output_test_predictions_file, "w") as writer:
                 with open(os.path.join(data_args.data_dir, "test.txt"), "r") as f:
@@ -304,17 +346,21 @@ def main():
                                 example_id += 1
                         elif preds_list[example_id]:
                             entity_label = preds_list[example_id].pop(0)
-                            if entity_label == 'O':
-                                output_line = line.split()[0] + " " + entity_label + "\n"
+                            if entity_label == "O":
+                                output_line = (
+                                    line.split()[0] + " " + entity_label + "\n"
+                                )
                             else:
-                                output_line = line.split()[0] + " " + entity_label[0] + "\n"
+                                output_line = (
+                                    line.split()[0] + " " + entity_label[0] + "\n"
+                                )
                             # output_line = line.split()[0] + " " + preds_list[example_id].pop(0) + "\n"
                             writer.write(output_line)
                         else:
                             logger.warning(
-                                "Maximum sequence length exceeded: No prediction for '%s'.", line.split()[0]
+                                "Maximum sequence length exceeded: No prediction for '%s'.",
+                                line.split()[0],
                             )
-            
 
     return results
 
