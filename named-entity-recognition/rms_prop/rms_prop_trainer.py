@@ -1,8 +1,8 @@
-from transformers import Trainer
+from custom_trainer import CustomTrainer
 from rms_prop.rms_prop_optimizer import RMSPropOptimizer
 
 
-class RMSPropTrainer(Trainer):
+class RMSPropTrainer(CustomTrainer):
     def create_optimizer(self):
         """
         This replaces the default optimizer with our custom hybrid optimizer.

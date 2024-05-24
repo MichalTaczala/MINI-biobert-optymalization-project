@@ -22,10 +22,12 @@ import pdb
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Union
+from seqeval.metrics import f1_score, precision_score, recall_score
 
 from filelock import FileLock
 
-from transformers import PreTrainedTokenizer, is_tf_available, is_torch_available
+from transformers import PreTrainedTokenizer, is_tf_available, is_torch_available, EvalPrediction
+import numpy as np
 
 
 logger = logging.getLogger(__name__)
@@ -102,16 +104,17 @@ if is_torch_available():
             # and the others will use the cache.
             lock_path = cached_features_file + ".lock"
             with FileLock(lock_path):
+            
+                self.examples = read_examples_from_file(data_dir, mode)
 
                 if os.path.exists(cached_features_file) and not overwrite_cache:
                     logger.info(f"Loading features from cached file {cached_features_file}")
                     self.features = torch.load(cached_features_file)
-                else:
+                if True:
                     logger.info(f"Creating features from dataset file at {data_dir}")
-                    examples = read_examples_from_file(data_dir, mode)
                     # TODO clean up all this to leverage built-in features of tokenizers
                     self.features = convert_examples_to_features(
-                        examples,
+                        self.examples,
                         labels,
                         max_seq_length,
                         tokenizer,
@@ -402,3 +405,37 @@ def get_labels(path: str) -> List[str]:
     else:
         # return ["O", "B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC"]
         return ["O", "B-bio", "I-bio"]
+        
+        
+def align_predictions(
+    predictions: np.ndarray, label_ids: np.ndarray, label_map: dict
+) -> tuple[list[int], list[int]]:
+    preds = np.argmax(predictions, axis=2)
+    batch_size, seq_len = preds.shape
+    out_label_list = [[] for _ in range(batch_size)]
+    preds_list = [[] for _ in range(batch_size)]
+
+    for i in range(batch_size):
+        for j in range(seq_len):
+            if label_ids[i, j] != nn.CrossEntropyLoss().ignore_index:
+                out_label_list[i].append(label_map[label_ids[i][j]])
+                preds_list[i].append(label_map[preds[i][j]])
+
+    return preds_list, out_label_list
+    
+
+def compute_metrics_direct(predictions: np.ndarray, label_ids: np.ndarray, label_map: dict) -> dict:
+    preds_list, out_label_list = align_predictions(predictions, label_ids, label_map)
+        
+    return {
+        "precision": precision_score(out_label_list, preds_list),
+        "recall": recall_score(out_label_list, preds_list),
+        "f1": f1_score(out_label_list, preds_list),
+    }
+
+
+def compute_metrics_curried(label_map: dict):
+    def compute_metrics(p: EvalPrediction) -> dict:
+        return compute_metrics_direct(p.predictions, p.label_ids, label_map)
+    return compute_metrics
+

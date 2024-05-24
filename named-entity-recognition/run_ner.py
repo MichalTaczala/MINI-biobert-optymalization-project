@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from seqeval.metrics import f1_score, precision_score, recall_score
 from torch import nn
 
 from transformers import (
@@ -39,10 +38,12 @@ from transformers import (
     Trainer,
     TrainingArguments,
     set_seed,
+    PrinterCallback,
 )
-from utils_ner import NerDataset, Split, get_labels
+from utils_ner import NerDataset, Split, get_labels, compute_metrics_curried, align_predictions
 
 from rms_prop.rms_prop_trainer import RMSPropTrainer
+from custom_trainer import CustomTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -235,43 +236,25 @@ def main():
         if training_args.do_eval
         else None
     )
-
-    def align_predictions(
-        predictions: np.ndarray, label_ids: np.ndarray
-    ) -> Tuple[List[int], List[int]]:
-        preds = np.argmax(predictions, axis=2)
-
-        batch_size, seq_len = preds.shape
-
-        out_label_list = [[] for _ in range(batch_size)]
-        preds_list = [[] for _ in range(batch_size)]
-
-        for i in range(batch_size):
-            for j in range(seq_len):
-                if label_ids[i, j] != nn.CrossEntropyLoss().ignore_index:
-                    out_label_list[i].append(label_map[label_ids[i][j]])
-                    preds_list[i].append(label_map[preds[i][j]])
-
-        return preds_list, out_label_list
-
-    def compute_metrics(p: EvalPrediction) -> Dict:
-        preds_list, out_label_list = align_predictions(p.predictions, p.label_ids)
-
-        return {
-            "precision": precision_score(out_label_list, preds_list),
-            "recall": recall_score(out_label_list, preds_list),
-            "f1": f1_score(out_label_list, preds_list),
-        }
+    
+    test_dataset = (NerDataset(
+        data_dir=data_args.data_dir,
+        tokenizer=tokenizer,
+        labels=labels,
+        model_type=config.model_type,
+        max_seq_length=data_args.max_seq_length,
+        overwrite_cache=data_args.overwrite_cache,
+        mode=Split.test,
+    ) if training_args.do_predict else None)
 
     # Initialize our Trainer
-
-    # trainer = Trainer(
-    trainer = RMSPropTrainer(
+    trainer = CustomTrainer(
+        label_map,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics_curried(label_map),
     )
 
     # Training
@@ -286,81 +269,63 @@ def main():
         trainer.save_model()
         # For convenience, we also re-save the tokenizer to the same directory,
         # so that you can share your model easily on huggingface.co/models =)
-        if trainer.is_world_master():
-            tokenizer.save_pretrained(training_args.output_dir)
+        #if trainer.is_world_master():
+        tokenizer.save_pretrained(training_args.output_dir)
 
     # Evaluation
     results = {}
-    if training_args.do_eval:
+    if training_args.do_eval and not training_args.do_train:
         logger.info("*** Evaluate ***")
 
         result = trainer.evaluate()
 
         output_eval_file = os.path.join(training_args.output_dir, "eval_results.txt")
-        if trainer.is_world_master():
-            with open(output_eval_file, "w") as writer:
-                logger.info("***** Eval results *****")
-                for key, value in result.items():
-                    logger.info("  %s = %s", key, value)
-                    writer.write("%s = %s\n" % (key, value))
+        #if trainer.is_world_master():
+        with open(output_eval_file, "w") as writer:
+            logger.info("***** Eval results *****")
+            for key, value in result.items():
+                logger.info("  %s = %s", key, value)
+                writer.write("%s = %s\n" % (key, value))
 
-            results.update(result)
-
+        results.update(result)
+    
     # Predict
     if training_args.do_predict:
-        test_dataset = NerDataset(
-            data_dir=data_args.data_dir,
-            tokenizer=tokenizer,
-            labels=labels,
-            model_type=config.model_type,
-            max_seq_length=data_args.max_seq_length,
-            overwrite_cache=data_args.overwrite_cache,
-            mode=Split.test,
-        )
-
         predictions, label_ids, metrics = trainer.predict(test_dataset)
-        preds_list, _ = align_predictions(predictions, label_ids)
-
+        preds_list, org_labels = align_predictions(predictions, label_ids, label_map)
+        
+        
         # Save predictions
-        output_test_results_file = os.path.join(
-            training_args.output_dir, "test_results.txt"
-        )
-        if trainer.is_world_master():
-            with open(output_test_results_file, "w") as writer:
-                logger.info("***** Test results *****")
-                for key, value in metrics.items():
-                    logger.info("  %s = %s", key, value)
-                    writer.write("%s = %s\n" % (key, value))
+        output_test_results_file = os.path.join(training_args.output_dir, "test_results.txt")
+        with open(output_test_results_file, "w") as writer:
+            logger.info("***** Test results *****")
+            for key, value in metrics.items():
+                logger.info("  %s = %s", key, value)
+                writer.write("%s = %s\n" % (key, value))
 
-        output_test_predictions_file = os.path.join(
-            training_args.output_dir, "test_predictions.txt"
-        )
-        if trainer.is_world_master():
-            with open(output_test_predictions_file, "w") as writer:
-                with open(os.path.join(data_args.data_dir, "test.txt"), "r") as f:
-                    example_id = 0
-                    for line in f:
-                        if line.startswith("-DOCSTART-") or line == "" or line == "\n":
-                            writer.write(line)
-                            if not preds_list[example_id]:
-                                example_id += 1
-                        elif preds_list[example_id]:
-                            entity_label = preds_list[example_id].pop(0)
-                            if entity_label == "O":
-                                output_line = (
-                                    line.split()[0] + " " + entity_label + "\n"
-                                )
-                            else:
-                                output_line = (
-                                    line.split()[0] + " " + entity_label[0] + "\n"
-                                )
-                            # output_line = line.split()[0] + " " + preds_list[example_id].pop(0) + "\n"
-                            writer.write(output_line)
+        
+        output_test_predictions_file = os.path.join(training_args.output_dir, "test_predictions.txt")
+        #if trainer.is_world_master():
+        with open(output_test_predictions_file, "w") as writer:
+            with open(os.path.join(data_args.data_dir, "test.txt"), "r") as f:
+                example_id = 0
+                for line in f:
+                    if line.startswith("-DOCSTART-") or line == "" or line == "\n":
+                        writer.write(line)
+                        if not preds_list[example_id]:
+                            example_id += 1
+                    elif preds_list[example_id]:
+                        entity_label = preds_list[example_id].pop(0)
+                        if entity_label == 'O':
+                            output_line = line.split()[0] + " " + entity_label + "\n"
                         else:
-                            logger.warning(
-                                "Maximum sequence length exceeded: No prediction for '%s'.",
-                                line.split()[0],
-                            )
+                            output_line = line.split()[0] + " " + entity_label[0] + "\n"
+                        
+                        writer.write(output_line)
+                    else:
+                        logger.warning(
+                            "Maximum sequence length exceeded: No prediction for '%s'.", line.split()[0]
+                        )
 
     return results
 
