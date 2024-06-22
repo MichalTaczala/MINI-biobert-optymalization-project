@@ -44,6 +44,7 @@ from utils_ner import NerDataset, Split, get_labels, compute_metrics_curried, al
 
 from rms_prop.rms_prop_trainer import RMSPropTrainer
 from custom_trainer import CustomTrainer
+from nestervo_trainer import NADAM
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +249,8 @@ def main():
     ) if training_args.do_predict else None)
 
     # Initialize our Trainer
-    trainer = CustomTrainer(
+    #trainer = CustomTrainer(
+    trainer = NADAM(
         label_map,
         model=model,
         args=training_args,
