@@ -27,5 +27,6 @@ class Nesterov(CustomTrainer):
                 self.model.parameters(),
                 lr=self.args.learning_rate,
                 nesterov=True,
+                momentum=0.9,
             )
         return self.optimizer
