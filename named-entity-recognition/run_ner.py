@@ -44,7 +44,7 @@ from utils_ner import NerDataset, Split, get_labels, compute_metrics_curried, al
 
 from rms_prop.rms_prop_trainer import RMSPropTrainer
 from custom_trainer import CustomTrainer
-from nestervo_trainer import NADAM
+from nestervo_trainer import NADAM, Nesterov
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +250,8 @@ def main():
 
     # Initialize our Trainer
     #trainer = CustomTrainer(
-    trainer = NADAM(
+    #trainer = NADAM(
+    trainer = Nesterov(
         label_map,
         model=model,
         args=training_args,
